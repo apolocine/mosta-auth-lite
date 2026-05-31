@@ -1,0 +1,64 @@
+{
+  "name": "@mostajs/auth-lite",
+  "version": "0.1.0",
+  "description": "Minimal email/password + session auth for Next.js on @mostajs/orm. No native addon — boots in Bolt.new / StackBlitz / edge.",
+  "license": "AGPL-3.0-or-later",
+  "author": "Dr Hamid MADANI <drmdh@msn.com>",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "llms.txt",
+    "LICENSE"
+  ],
+  "keywords": [
+    "auth",
+    "authentication",
+    "sessions",
+    "nextjs",
+    "mostajs",
+    "orm",
+    "webcontainer",
+    "lightweight",
+    "password"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/apolocine/mosta-auth-lite"
+  },
+  "homepage": "https://mostajs.dev",
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "@mostajs/orm": ">=2.5.2",
+    "next": ">=14.0.0"
+  },
+  "devDependencies": {
+    "@mostajs/orm": "^2.5.2",
+    "@types/node": "^22.0.0",
+    "better-sqlite3": "^12.10.0",
+    "next": "^15.4.11",
+    "react": "^19.0.0",
+    "typescript": "^5.6.0"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/apolocine"
+  },
+  "dependencies": {
+    "@mostajs/url": "^0.5.0"
+  }
+}

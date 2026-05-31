@@ -1,0 +1,101 @@
+# @mostajs/auth-lite — fiche LLM
+> Auth email/mot de passe + sessions minimale pour Next.js (App Router) sur @mostajs/orm. Zéro addon natif → boote dans Bolt.new / StackBlitz / edge.
+
+- Version: 0.1.0 · Licence: AGPL-3.0-or-later · Auteur: Dr Hamid MADANI <drmdh@msn.com>
+- Chemin: mostajs/mosta-auth-lite · Statut: scaffold initial (src/index.ts) · peer: @mostajs/orm >=2.5.2, next >=14
+- Origine: extraction de la couche auth du `mostajs-saas-starter`, durcie jusqu'à booter réellement dans le WebContainer StackBlitz/Bolt.
+
+## RÔLE
+Brique d'authentification **minimale et sans dépendance native** pour les apps Next.js
+App Router qui tournent sur `@mostajs/orm` — en particulier celles générées/exécutées
+dans un WebContainer (Bolt.new, StackBlitz) ou à l'edge, où `bcrypt`/`argon2` (addons
+natifs) ne se compilent pas. Fournit : hachage de mot de passe (SHA-256 salé itéré,
+cœur Node, zéro binaire), un `EntitySchema` de session prêt à l'emploi, des Route
+Handlers login/signup/logout, et un lecteur de session pour Server Components.
+Ce N'EST PAS un remplaçant de `@mostajs/auth` (le module complet : Argon2id, OAuth/OIDC,
+magic link, MFA TOTP, WebAuthn, refresh tokens, NextAuth v5). `auth-lite` vise la
+simplicité lisible et la compatibilité WebContainer ; `@mostajs/auth` vise la production
+riche en fonctionnalités. Choisir l'un OU l'autre selon le besoin.
+
+## INSTALLATION
+npm i @mostajs/auth-lite @mostajs/orm next
+(le consumer fournit son entité `User` et ses repos via @mostajs/orm ; le module ne ship
+aucune DB. Pour booter en navigateur/WebContainer, utiliser un dialecte WASM de l'ORM :
+`sqljs` ou `pglite`.)
+
+## EXPORTS (point d'entrée unique `.`)
+- Fonctions: hashPassword, verifyPassword, createAuthHandlers, createGetCurrentUser
+- Schéma: SessionSchema (EntitySchema)
+- Types: AuthRepo, AuthLiteConfig
+
+## API — SIGNATURES
+hashPassword(password: string): string
+  // → "salt:hashHex" ; SHA-256 salé + itéré 10 000× (crypto cœur Node, aucun addon natif).
+verifyPassword(password: string, stored: string): boolean
+  // comparaison à temps constant (timingSafeEqual). false si format invalide.
+SessionSchema: EntitySchema
+  // name 'Session', collection 'sessions' ; fields { token (string, unique), expiresAt (date) } ;
+  // relation user → 'User' (many-to-one, required, onDelete: 'cascade') ; index unique sur token ; timestamps.
+createAuthHandlers(config: AuthLiteConfig): { login, signup, logout }
+  // chaque membre = (req: NextRequest) => Promise<NextResponse> — à exporter comme POST dans un Route Handler.
+  // login   : vérifie email+password, crée la session, pose le cookie sur la réponse, 303 → afterAuth.
+  // signup  : valide (email/name requis, password ≥ 6), rejette si email existe, crée user+session, 303 → afterAuth.
+  // logout  : supprime la session DB + le cookie, 303 → afterLogout.
+createGetCurrentUser<TUser = unknown>(config: AuthLiteConfig): () => Promise<TUser | null>
+  // getCurrentUser() : lit le cookie AVANT toute requête DB, résout la session, renvoie l'utilisateur peuplé ou null.
+  // null si pas de cookie / session absente / session expirée.
+
+## TYPES
+AuthRepo {
+  findOne(filter): Promise<any>
+  create(data): Promise<any>
+  delete(id: string): Promise<unknown>
+  findByIdWithRelations(id: string, relations: string[], options?): Promise<any>
+}  // sous-ensemble compatible @mostajs/orm BaseRepository.
+
+AuthLiteConfig {
+  getRepos: () => Promise<{ users: AuthRepo; sessions: AuthRepo }>   // requis
+  cookieName?: string         // défaut "session"
+  ttlDays?: number            // défaut 7
+  afterAuth?: string          // défaut "/dashboard"
+  afterLogout?: string        // défaut "/"
+  loginErrorPath?: string     // défaut "/login?error=invalid"
+  signupErrorPath?: (kind: 'invalid' | 'exists') => string  // défaut "/signup?error=<kind>"
+}
+
+## CONTRAINTES CONSUMER
+- L'entité `User` doit exposer au minimum `email` (unique), `passwordHash`, et `name` (pour signup).
+- Enregistrer `SessionSchema` à côté de l'entité `User` dans l'ORM.
+- `getRepos()` renvoie des `BaseRepository` (ou objets compatibles `AuthRepo`).
+
+## POURQUOI « lite » — leçons WebContainer (gravées dans l'API)
+- L1 — Mutation de cookie via Route Handlers : `createAuthHandlers` pose le cookie sur l'objet
+  `NextResponse` (`res.cookies.set`), pas via `cookies()`. Certains runtimes (StackBlitz
+  WebContainer) perdent le contexte async (AsyncLocalStorage) de Next à travers un `await` DB,
+  ce qui fait planter `cookies()` ("called outside a request scope"). Poser le cookie sur la
+  réponse marche partout.
+- L2 — Lecture de session avant DB : `getCurrentUser` lit le cookie AVANT toute requête DB
+  (contexte requête intact), puis seulement résout l'utilisateur.
+- L3 — Zéro addon natif : hachage SHA-256 (cœur `crypto`), pas de bcrypt/argon2 → compile et
+  boote en WebContainer / edge. Pour un serveur prod classique, on peut swapper argon2/scrypt
+  (l'API hashPassword/verifyPassword reste identique) ou passer à `@mostajs/auth`.
+- Garde-fou consumer : protéger CHAQUE page par `const u = await getCurrentUser(); if (!u) redirect('/login')`
+  — ne pas se reposer sur le seul `layout` + assertion `!` (layout et page s'exécutent en
+  parallèle → crash `null.id`).
+
+## EXEMPLE MINIMAL (Route Handler login)
+// app/api/auth/login/route.ts
+import { createAuthHandlers } from '@mostajs/auth-lite';
+import { getRepos } from '@/lib/orm';
+const { login } = createAuthHandlers({ getRepos });
+export const POST = login;
+
+// lib/auth.ts (Server Components)
+import { createGetCurrentUser } from '@mostajs/auth-lite';
+import { getRepos } from '@/lib/orm';
+export const getCurrentUser = createGetCurrentUser<User>({ getRepos });
+
+## VOIR AUSSI
+- `@mostajs/orm` — la couche données (dialectes WASM `sqljs`/`pglite` pour WebContainer).
+- `@mostajs/auth` — auth complète (Argon2id, OAuth, MFA, WebAuthn…) pour serveurs prod.
+- `mostajs-saas-starter` — app de référence d'où la couche est extraite.
