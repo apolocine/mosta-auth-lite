@@ -43,13 +43,32 @@ export function createAuthHandlers(config: AuthLiteConfig) {
   const afterLogout = config.afterLogout ?? '/';
   const loginError = config.loginErrorPath ?? '/login?error=invalid';
   const signupError = config.signupErrorPath ?? ((k: 'invalid' | 'exists') => `/signup?error=${k}`);
+  const crossSite = config.crossSiteCookie ?? false;
 
-  async function openSession(sessions: AuthRepo, userId: string): Promise<NextResponse> {
+  /** La requête arrive-t-elle en https (proxy forwarde `x-forwarded-proto`, ou URL https) ? */
+  function isHttps(req: NextRequest): boolean {
+    if (req.headers.get('x-forwarded-proto') === 'https') return true;
+    try { return new URL(req.url).protocol === 'https:'; } catch { return false; }
+  }
+
+  /**
+   * Attributs du cookie de session. `crossSiteCookie` + https → `sameSite:'none'`
+   * + `secure` (cookie renvoyé en iframe cross-site, ex. CodeSandbox). Sinon
+   * `sameSite:'lax'` (et pas de `secure`, pour que localhost http garde la session).
+   */
+  function cookieOpts(req: NextRequest, expires: Date) {
+    if (crossSite && isHttps(req)) {
+      return { httpOnly: true, sameSite: 'none' as const, secure: true, path: '/', expires };
+    }
+    return { httpOnly: true, sameSite: 'lax' as const, path: '/', expires };
+  }
+
+  async function openSession(req: NextRequest, sessions: AuthRepo, userId: string): Promise<NextResponse> {
     const token = randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + ttlMs);
     await sessions.create({ token, user: userId, expiresAt });
     const res = see(afterAuth);
-    res.cookies.set(cookie, token, { httpOnly: true, sameSite: 'lax', path: '/', expires: expiresAt });
+    res.cookies.set(cookie, token, cookieOpts(req, expiresAt));
     return res;
   }
 
@@ -63,7 +82,7 @@ export function createAuthHandlers(config: AuthLiteConfig) {
     if (!user || !verifyPassword(password, user.passwordHash)) {
       return see(loginError);
     }
-    return openSession(sessions, user.id);
+    return openSession(req, sessions, user.id);
   }
 
   /** POST handler — create the account, start a session. */
@@ -80,7 +99,7 @@ export function createAuthHandlers(config: AuthLiteConfig) {
       return see(signupError('exists'));
     }
     const user = await users.create({ email, name, passwordHash: hashPassword(password) });
-    return openSession(sessions, user.id);
+    return openSession(req, sessions, user.id);
   }
 
   /** POST handler — destroy the session (DB + cookie). */

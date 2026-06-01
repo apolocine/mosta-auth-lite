@@ -90,4 +90,13 @@ export interface AuthLiteConfig {
   loginErrorPath?: string;
   /** Redirect on signup error (default "/signup?error=<kind>"). */
   signupErrorPath?: (kind: 'invalid' | 'exists') => string;
+  /**
+   * Embedding in a **cross-site iframe** (ex. CodeSandbox preview `*.csb.app`) :
+   * un cookie `sameSite:'lax'` n'est PAS renvoyé → session perdue. Mettre `true`
+   * pour utiliser `sameSite:'none'; secure:true` **quand la requête est en
+   * https** (détecté via `x-forwarded-proto`), et retomber sur `lax` en http
+   * (localhost dev). Défaut `false` (lax). ⚠️ `none` réduit la protection CSRF —
+   * à n'activer que pour des previews embarquées, pas pour une vraie prod hors-iframe.
+   */
+  crossSiteCookie?: boolean;
 }
