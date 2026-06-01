@@ -1,6 +1,6 @@
 {
   "name": "@mostajs/auth-lite",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Minimal email/password + session auth for Next.js on @mostajs/orm. No native addon — boots in Bolt.new / StackBlitz / edge.",
   "license": "AGPL-3.0-or-later",
   "author": "Dr Hamid MADANI <drmdh@msn.com>",
@@ -57,8 +57,5 @@
   "funding": {
     "type": "github",
     "url": "https://github.com/sponsors/apolocine"
-  },
-  "dependencies": {
-    "@mostajs/url": "^0.5.0"
   }
 }

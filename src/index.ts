@@ -18,17 +18,17 @@
 import type { NextRequest } from 'next/server';
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import type { EntitySchema } from '@mostajs/orm';
-import { baseFromHeaders } from '@mostajs/url';
 
 /**
- * Base PUBLIQUE (`proto://host`) pour les redirects. En WebContainer
- * (StackBlitz/Bolt) ou derrière un reverse proxy, `req.url` côté Node pointe
- * sur le bind interne (`http://localhost:3000`) → l'utilisateur serait redirigé
- * vers localhost. `baseFromHeaders` lit l'hôte public réel depuis
- * `X-Forwarded-Host`/`Host` ; fallback sur l'origine de `req.url`.
+ * Réponse 303 avec un `Location` **relatif** (ex. `/dashboard`). Le navigateur
+ * le résout contre l'URL PUBLIQUE de la requête courante → fonctionne en
+ * WebContainer (StackBlitz/Bolt — qui ne transmettent pas l'hôte public au
+ * serveur), derrière un reverse proxy, et en localhost, **sans que le serveur
+ * ait besoin de connaître son hôte**. Plus robuste qu'une URL absolue.
  */
-function reqBase(req: NextRequest): string {
-  return baseFromHeaders(req.headers) ?? new URL(req.url).origin;
+async function see(location: string): Promise<import('next/server').NextResponse> {
+  const { NextResponse } = await import('next/server');
+  return new NextResponse(null, { status: 303, headers: { Location: location } });
 }
 
 // ---------------------------------------------------------------------------
@@ -116,58 +116,54 @@ export function createAuthHandlers(config: AuthLiteConfig) {
   const loginError = config.loginErrorPath ?? '/login?error=invalid';
   const signupError = config.signupErrorPath ?? ((k: 'invalid' | 'exists') => `/signup?error=${k}`);
 
-  async function startSession(req: NextRequest, sessions: AuthRepo, userId: string) {
-    const { NextResponse } = await import('next/server');
+  async function startSession(sessions: AuthRepo, userId: string) {
     const token = randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + ttlMs);
     await sessions.create({ token, user: userId, expiresAt });
-    const res = NextResponse.redirect(new URL(afterAuth, reqBase(req)), 303);
+    const res = await see(afterAuth);
     res.cookies.set(cookie, token, { httpOnly: true, sameSite: 'lax', path: '/', expires: expiresAt });
     return res;
   }
 
   /** POST handler — verify credentials, start a session. */
   async function login(req: NextRequest) {
-    const { NextResponse } = await import('next/server');
     const form = await req.formData();
     const email = String(form.get('email') ?? '').toLowerCase().trim();
     const password = String(form.get('password') ?? '');
     const { users, sessions } = await config.getRepos();
     const user = await users.findOne({ email });
     if (!user || !verifyPassword(password, user.passwordHash)) {
-      return NextResponse.redirect(new URL(loginError, reqBase(req)), 303);
+      return see(loginError);
     }
-    return startSession(req, sessions, user.id);
+    return startSession(sessions, user.id);
   }
 
   /** POST handler — create the account, start a session. */
   async function signup(req: NextRequest) {
-    const { NextResponse } = await import('next/server');
     const form = await req.formData();
     const email = String(form.get('email') ?? '').toLowerCase().trim();
     const name = String(form.get('name') ?? '').trim();
     const password = String(form.get('password') ?? '');
     if (!email || !name || password.length < 6) {
-      return NextResponse.redirect(new URL(signupError('invalid'), reqBase(req)), 303);
+      return see(signupError('invalid'));
     }
     const { users, sessions } = await config.getRepos();
     if (await users.findOne({ email })) {
-      return NextResponse.redirect(new URL(signupError('exists'), reqBase(req)), 303);
+      return see(signupError('exists'));
     }
     const user = await users.create({ email, name, passwordHash: hashPassword(password) });
-    return startSession(req, sessions, user.id);
+    return startSession(sessions, user.id);
   }
 
   /** POST handler — destroy the session (DB + cookie). */
   async function logout(req: NextRequest) {
-    const { NextResponse } = await import('next/server');
     const token = req.cookies.get(cookie)?.value;
     if (token) {
       const { sessions } = await config.getRepos();
       const session = await sessions.findOne({ token });
       if (session) await sessions.delete(session.id);
     }
-    const res = NextResponse.redirect(new URL(afterLogout, reqBase(req)), 303);
+    const res = await see(afterLogout);
     res.cookies.delete(cookie);
     return res;
   }
