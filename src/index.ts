@@ -1,35 +1,23 @@
 /**
- * @mostajs/auth-lite — minimal, dependency-free email/password + session auth
- * for Next.js (App Router) on top of @mostajs/orm.
+ * @mostajs/auth-lite — minimal email/password + session auth on @mostajs/orm.
  *
- * Why "lite": it boots in WebContainers (Bolt.new / StackBlitz) and the edge —
- * no native addon (no bcrypt/argon2), and it sets the session cookie on the
- * NextResponse object inside Route Handlers, which sidesteps the AsyncLocalStorage
- * pitfalls of `cookies()` after a DB call in constrained runtimes.
+ * This entry (`@mostajs/auth-lite`) is the **framework-agnostic core** :
+ * password hashing + the `Session` schema + the shared types. It imports
+ * **no `next`**, so it loads in Node / edge / WebContainer and is unit-testable.
  *
- * Password hashing is salted, iterated SHA-256 (works everywhere). For a
- * production server you can swap in argon2/scrypt — the API is unchanged.
+ * The **Next.js adapter** (Route Handlers + `getCurrentUser`) lives in the
+ * `@mostajs/auth-lite/next` subpath — it statically imports `next/server` and
+ * `next/headers` so that `cookies()` is the first `await` (request scope intact
+ * in WebContainers).
+ *
+ * Password hashing is salted, iterated SHA-256 (no native addon — boots
+ * everywhere). For a production server you can swap in argon2/scrypt; the API
+ * is unchanged.
  *
  * @author Dr Hamid MADANI <drmdh@msn.com>
  */
-// Types only — érasés au runtime (aucun import next au top-level → le module se
-// charge en Node/edge/WebContainer ; NextResponse/cookies sont importés
-// dynamiquement DANS les handlers, qui ne tournent que dans le runtime Next).
-import type { NextRequest } from 'next/server';
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import type { EntitySchema } from '@mostajs/orm';
-
-/**
- * Réponse 303 avec un `Location` **relatif** (ex. `/dashboard`). Le navigateur
- * le résout contre l'URL PUBLIQUE de la requête courante → fonctionne en
- * WebContainer (StackBlitz/Bolt — qui ne transmettent pas l'hôte public au
- * serveur), derrière un reverse proxy, et en localhost, **sans que le serveur
- * ait besoin de connaître son hôte**. Plus robuste qu'une URL absolue.
- */
-async function see(location: string): Promise<import('next/server').NextResponse> {
-  const { NextResponse } = await import('next/server');
-  return new NextResponse(null, { status: 303, headers: { Location: location } });
-}
 
 // ---------------------------------------------------------------------------
 // Password hashing — salted, iterated SHA-256 (no native addon, boots anywhere)
@@ -76,7 +64,7 @@ export const SessionSchema: EntitySchema = {
 };
 
 // ---------------------------------------------------------------------------
-// Config
+// Config / shared types
 // ---------------------------------------------------------------------------
 
 /** Minimal repository shape this module needs (compatible with @mostajs/orm BaseRepository). */
@@ -102,90 +90,4 @@ export interface AuthLiteConfig {
   loginErrorPath?: string;
   /** Redirect on signup error (default "/signup?error=<kind>"). */
   signupErrorPath?: (kind: 'invalid' | 'exists') => string;
-}
-
-// ---------------------------------------------------------------------------
-// Route Handlers — login / signup / logout (set the cookie on the response)
-// ---------------------------------------------------------------------------
-
-export function createAuthHandlers(config: AuthLiteConfig) {
-  const cookie = config.cookieName ?? 'session';
-  const ttlMs = (config.ttlDays ?? 7) * 86400000;
-  const afterAuth = config.afterAuth ?? '/dashboard';
-  const afterLogout = config.afterLogout ?? '/';
-  const loginError = config.loginErrorPath ?? '/login?error=invalid';
-  const signupError = config.signupErrorPath ?? ((k: 'invalid' | 'exists') => `/signup?error=${k}`);
-
-  async function startSession(sessions: AuthRepo, userId: string) {
-    const token = randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + ttlMs);
-    await sessions.create({ token, user: userId, expiresAt });
-    const res = await see(afterAuth);
-    res.cookies.set(cookie, token, { httpOnly: true, sameSite: 'lax', path: '/', expires: expiresAt });
-    return res;
-  }
-
-  /** POST handler — verify credentials, start a session. */
-  async function login(req: NextRequest) {
-    const form = await req.formData();
-    const email = String(form.get('email') ?? '').toLowerCase().trim();
-    const password = String(form.get('password') ?? '');
-    const { users, sessions } = await config.getRepos();
-    const user = await users.findOne({ email });
-    if (!user || !verifyPassword(password, user.passwordHash)) {
-      return see(loginError);
-    }
-    return startSession(sessions, user.id);
-  }
-
-  /** POST handler — create the account, start a session. */
-  async function signup(req: NextRequest) {
-    const form = await req.formData();
-    const email = String(form.get('email') ?? '').toLowerCase().trim();
-    const name = String(form.get('name') ?? '').trim();
-    const password = String(form.get('password') ?? '');
-    if (!email || !name || password.length < 6) {
-      return see(signupError('invalid'));
-    }
-    const { users, sessions } = await config.getRepos();
-    if (await users.findOne({ email })) {
-      return see(signupError('exists'));
-    }
-    const user = await users.create({ email, name, passwordHash: hashPassword(password) });
-    return startSession(sessions, user.id);
-  }
-
-  /** POST handler — destroy the session (DB + cookie). */
-  async function logout(req: NextRequest) {
-    const token = req.cookies.get(cookie)?.value;
-    if (token) {
-      const { sessions } = await config.getRepos();
-      const session = await sessions.findOne({ token });
-      if (session) await sessions.delete(session.id);
-    }
-    const res = await see(afterLogout);
-    res.cookies.delete(cookie);
-    return res;
-  }
-
-  return { login, signup, logout };
-}
-
-// ---------------------------------------------------------------------------
-// getCurrentUser — read the session in Server Components (cookie read before DB)
-// ---------------------------------------------------------------------------
-
-export function createGetCurrentUser<TUser = unknown>(config: AuthLiteConfig) {
-  const cookie = config.cookieName ?? 'session';
-  return async function getCurrentUser(): Promise<TUser | null> {
-    const { cookies } = await import('next/headers');
-    const token = (await cookies()).get(cookie)?.value;
-    if (!token) return null;
-    const { sessions } = await config.getRepos();
-    const session = await sessions.findOne({ token });
-    if (!session) return null;
-    if (new Date(session.expiresAt) < new Date()) return null;
-    const populated = (await sessions.findByIdWithRelations(session.id, ['user'])) as { user?: TUser } | null;
-    return populated?.user ?? null;
-  };
 }

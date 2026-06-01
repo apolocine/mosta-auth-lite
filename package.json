@@ -1,6 +1,6 @@
 {
   "name": "@mostajs/auth-lite",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Minimal email/password + session auth for Next.js on @mostajs/orm. No native addon — boots in Bolt.new / StackBlitz / edge.",
   "license": "AGPL-3.0-or-later",
   "author": "Dr Hamid MADANI <drmdh@msn.com>",
@@ -10,6 +10,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "import": "./dist/next.js",
+      "default": "./dist/next.js"
     }
   },
   "files": [
